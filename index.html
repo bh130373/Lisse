@@ -171,6 +171,8 @@ function emptyState() { const s = exampleState(); s.example = false; s.factures 
 
 let S;
 try { S = JSON.parse(localStorage.getItem(KEY)) || exampleState(); } catch (e) { S = exampleState(); }
+function ensureBank() { S.bank ||= {}; const B = S.bank; B.server ||= ""; B.token ||= ""; B.connections ||= []; B.imported ||= {}; B.inbox ||= []; B.lastSync ||= 0; return B; }
+ensureBank();
 function save() { try { localStorage.setItem(KEY, JSON.stringify(S)); } catch (e) { toast("Enregistrement impossible sur cet appareil"); } }
 
 /* ---------- Calculs ---------- */
@@ -243,6 +245,7 @@ function viewHome() {
       <div class="f"><span class="label">Freelance lissé</span><span class="num">${fmt0(sim.complement)}</span></div>
     </div>
   </section>
+  ${bankAlerts()}
   ${late.length ? `<div class="banner" style="background:var(--danger-soft)"><span><b>${late.length} facture${late.length > 1 ? "s" : ""} en retard</b> de plus de 30 jours</span><button class="btn small" data-tabgo="income">Voir</button></div>` : ""}
   <div class="kpis">
     <div class="card"><span class="label">Réserve lissée</span><span class="num" style="color:var(--free)">${fmt0(sim.reserve)}</span><small class="muted">${cover >= 0.1 ? "couvre " + cover.toFixed(1).replace(".", ",") + " mois" : "à constituer"}</small></div>
@@ -263,6 +266,7 @@ function viewIncome() {
   <section class="card"><div class="row between"><div><div class="label">Salaire net mensuel</div><div class="num" style="font-size:22px;font-weight:700;color:var(--salary)">${fmt0(S.settings.salaire)}</div></div><button class="btn small ghost" data-tabgo="settings">Modifier</button></div></section>
   <section class="card"><div class="label">Complément mensuel visé</div><div class="num" style="font-size:22px;font-weight:700;color:var(--free)">${fmt0(sim.cible)}</div>
   <small class="muted">${S.settings.mode === "auto" ? "80 % de votre moyenne freelance nette des 6 derniers mois : la marge fait grossir la réserve." : "Montant fixe choisi dans les réglages."} Chaque facture payée perd ${S.settings.taux} % pour les charges, le reste alimente la réserve.</small></section>
+  ${inboxCard()}
   <section class="card"><h2 style="margin-bottom:4px">Factures freelance</h2><div class="list">
   ${list.length ? list.map(f => `<div class="item" data-fac="${f.id}"><div class="dot" style="background:var(--free-soft);color:var(--free)">${initials(f.client)}</div>
     <div class="t"><b>${esc(f.client)}</b><small>${f.statut === "payee" ? "Payée le " + dfr(f.paiement) : "Émise le " + dfr(f.emission)}</small></div>
@@ -276,15 +280,17 @@ function viewSpend() {
   return `<div class="stack">
   <header class="top"><div><div class="label">Dépenses</div><h1>${monthName(month)}</h1></div>${monthNav()}</header>
   <div class="row"><button class="btn" style="flex:1" data-act="addDep">+ Ajouter</button><button class="btn ghost" style="flex:1" data-act="scan">Scanner un ticket</button></div>
+  ${syncBar()}
   <section class="card"><div class="row between"><h2>Total</h2><span class="num" style="font-size:20px;font-weight:700">${fmt(deps.reduce((a, d) => a + d.montant, 0))}</span></div>
   <div class="list">${deps.length ? deps.map(d => `<div class="item" data-dep="${d.id}"><div class="dot" style="background:${CATS[d.cat]?.c || "#777"}22;color:${CATS[d.cat]?.c || "#777"}">${initials(CATS[d.cat]?.n)}</div>
-    <div class="t"><b>${esc(d.libelle)}</b><small>${CATS[d.cat]?.n || "Autre"} · ${dfr(d.date)}${d.scan ? " · scanné" : ""}</small></div><div class="amt">${fmt(d.montant)}</div></div>`).join("")
+    <div class="t"><b>${esc(d.libelle)}</b><small>${CATS[d.cat]?.n || "Autre"} · ${dfr(d.date)}${d.scan ? " · scanné" : ""}${d.source === "banque" ? " · " + esc(d.banque || "banque") : ""}</small></div><div class="amt">${fmt(d.montant)}</div></div>`).join("")
     : `<div class="empty">Aucune dépense ce mois-ci.<br>Scannez un ticket ou ajoutez-en une.</div>`}</div></section></div>`;
 }
 
 function viewSettings() {
   const st = S.settings;
   return `<div class="stack"><header class="top"><h1>Réglages</h1></header>
+  ${bankSettings()}
   <section class="card stack"><h2>Revenus</h2>
     <div class="field"><label for="set-sal">Salaire net mensuel (€)</label><input id="set-sal" type="number" inputmode="decimal" value="${st.salaire}" data-set="salaire"></div>
     <div class="field"><label for="set-taux">Part mise de côté sur chaque facture (%)</label><input id="set-taux" type="number" inputmode="decimal" value="${st.taux}" data-set="taux"><small class="muted">Cotisations URSSAF et impôt. Vérifiez le taux qui s'applique à votre activité sur urssaf.fr.</small></div>
@@ -397,18 +403,19 @@ function parseReceipt(text) {
   }
   const skip = /^(ticket|facture|re[cç]u|bienvenue|merci|tel|t[ée]l[ée]phone|siret|tva|date|n°|www|http)/i;
   const commerce = (lines.find(l => /[a-zà-ÿ]{3,}/i.test(l) && !skip.test(l) && l.length < 40) || "").replace(/^(client|destinataire|factur[ée]e?\s*[àa])\s*:?/i, "").replace(/[^\p{L}\p{N}' &.-]/gu, "").replace(/\s+/g, " ").trim();
-  const low = text.toLowerCase(); const guess = [
-    ["courses", /carrefour|leclerc|auchan|lidl|aldi|monoprix|franprix|intermarch|casino|super u|picard|biocoop|naturalia/],
-    ["transport", /sncf|ratp|navigo|uber|bolt|total ?energies|esso|bp |shell|essence|gazole|parking|p[ée]age/],
-    ["restaurants", /restaurant|brasserie|caf[ée]|boulangerie|mcdonald|burger|pizza|sushi|bistro|kfc/],
-    ["sante", /pharmacie|m[ée]decin|docteur|optique|dentiste/],
-    ["abonnements", /netflix|spotify|deezer|disney|free mobile|orange|sfr|bouygues|canal|amazon prime|abonnement/],
-    ["logement", /loyer|edf|engie|eau|assurance habitation|syndic/],
-    ["loisirs", /cin[ée]ma|fnac|d[ée]cathlon|th[ée][aâ]tre|mus[ée]e|concert/]
-  ].find(([, r]) => r.test(low));
   const isInvoice = /facture/i.test(text) && /(client|destinataire|factur[ée] [àa])/i.test(text);
-  return { montant, date, commerce, cat: guess ? guess[0] : "autre", isInvoice };
+  return { montant, date, commerce, cat: guessCat(text), isInvoice };
 }
+const CAT_RULES = [
+  ["courses", /carrefour|leclerc|auchan|lidl|aldi|monoprix|franprix|intermarch|casino|super ?u\b|hyper ?u\b|picard|biocoop|naturalia|grand frais|migros|coop\b|denner|spar\b|delhaize|colruyt/],
+  ["transport", /sncf|ratp|navigo|uber|bolt|total ?energies|esso|\bbp\b|shell|avia|essence|carburant|gazole|parking|p[ée]age|vinci autoroute|sanef|blablacar|\bcff\b|\bsbb\b|tcl\b|keolis/],
+  ["restaurants", /restaurant|brasserie|caf[ée]|boulangerie|mcdonald|burger|pizza|sushi|bistro|kfc|deliveroo|uber ?eats|just ?eat|starbucks|paul\b/],
+  ["sante", /pharmacie|m[ée]decin|docteur|optique|dentiste|kin[ée]|laboratoire|mutuelle/],
+  ["abonnements", /netflix|spotify|deezer|disney|free ?mobile|free telecom|\borange\b|\bsfr\b|bouygues|sosh|red by sfr|canal ?\+?|amazon prime|apple\.com|icloud|google|youtube|abonnement|swisscom|salt\b|sunrise/],
+  ["logement", /loyer|\bedf\b|engie|total ?energies electricit|\beau\b|veolia|suez|assurance habitation|syndic|foncier|ikea|leroy merlin|castorama/],
+  ["loisirs", /cin[ée]ma|fnac|d[ée]cathlon|th[ée][aâ]tre|mus[ée]e|concert|steam|playstation|cultura|ticketmaster/]
+];
+function guessCat(text) { const low = String(text || "").toLowerCase(); const g = CAT_RULES.find(([, r]) => r.test(low)); return g ? g[0] : "autre"; }
 
 let scanResult = null;
 async function handleScan(file) {
@@ -438,6 +445,228 @@ function showScanResult(kind) {
   if (kind === "fac") facForm({ client: r.commerce, montant: r.montant ?? "", emission: r.date || today(), statut: "attente" }, head);
   else depForm({ libelle: r.commerce, montant: r.montant ?? "", date: r.date || today(), cat: r.cat, scan: true }, head);
 }
+
+/* ---------- Synchronisation bancaire (serveur Lissé + Enable Banking) ---------- */
+const COUNTRIES = { FR: "France", BE: "Belgique", LU: "Luxembourg", DE: "Allemagne", ES: "Espagne", IT: "Italie", NL: "Pays-Bas", PT: "Portugal", AT: "Autriche", IE: "Irlande", FI: "Finlande" };
+let syncing = false, bankList = [], bankCountry = "FR", pollT = null;
+const isoDaysAgo = n => new Date(Date.now() - n * 864e5).toISOString().slice(0, 10);
+const addDays = (d, n) => new Date(new Date(d + "T12:00").getTime() + n * 864e5).toISOString().slice(0, 10);
+const accKey = a => a.iban || a.uid;
+
+async function api(path, opts = {}) {
+  const B = ensureBank();
+  if (!B.server) throw new Error("Indiquez l'adresse du serveur dans Réglages › Banques.");
+  const ctl = new AbortController(); const tm = setTimeout(() => ctl.abort(), 60000);
+  let r;
+  try {
+    r = await fetch(B.server + path, { method: opts.method || "GET", cache: "no-store", signal: ctl.signal,
+      headers: { "X-Lisse-Token": B.token, ...(opts.body ? { "Content-Type": "application/json" } : {}) },
+      body: opts.body ? JSON.stringify(opts.body) : undefined });
+  } catch (e) { throw new Error("Serveur injoignable. Vérifiez son adresse et votre connexion."); }
+  finally { clearTimeout(tm); }
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(j.error || "Erreur du serveur (" + r.status + ")");
+  return j;
+}
+
+function cleanLabel(t) {
+  let s = (t.counterpart || t.text || "").replace(/\b(paiement|paie|achat|facture)\s+(par\s+)?(carte|cb)\b/gi, " ")
+    .replace(/\bcarte\s*x?\d{4}\b|\bx+\d{4}\b|\bcb\*?\d*\b/gi, " ")
+    .replace(/\bprlv\s+sepa\b|\bpr[ée]l[èe]vement( sepa)?\b|\bvir(ement)?\s+(sepa\s+)?(inst(antan[ée])?\s+)?(re[cç]u|[ée]mis)?\b/gi, " ")
+    .replace(/\b\d{2}[\/.]\d{2}([\/.]\d{2,4})?\b/g, " ").replace(/\s{2,}/g, " ").trim();
+  if (!s) s = t.text || "Opération bancaire";
+  s = s.slice(0, 42).trim();
+  if (s === s.toUpperCase()) s = s.toLowerCase().replace(/(^|[\s'-])\p{L}/gu, c => c.toUpperCase());
+  return s;
+}
+
+async function syncBanks(manual) {
+  const B = ensureBank();
+  if (!B.server || !B.connections.length) { if (manual) toast("Connectez d'abord une banque dans Réglages"); return; }
+  if (syncing) return;
+  syncing = true; render();
+  let added = 0, credits = 0; const errors = [];
+  for (const c of B.connections) {
+    if (c.validUntil && new Date(c.validUntil) < new Date()) { errors.push(c.bank + " : accès expiré, reconnectez la banque"); continue; }
+    for (const a of c.accounts.filter(a => a.on !== false)) {
+      const from = a.lastDate ? addDays(a.lastDate, -7) : isoDaysAgo(90);
+      try {
+        const txs = await api("/transactions?account=" + encodeURIComponent(a.uid) + "&from=" + from);
+        for (const t of txs) {
+          if ((t.status && t.status !== "BOOK") || !t.date || !(t.amount > 0)) continue;
+          const id = accKey(a) + ":" + (t.ref || [t.date, t.amount, t.dir, (t.text || "").slice(0, 40)].join("|"));
+          if (!a.lastDate || t.date > a.lastDate) a.lastDate = t.date;
+          if (B.imported[id]) continue;
+          B.imported[id] = 1;
+          if (t.dir === "DBIT") { S.depenses.push({ id: uid(), libelle: cleanLabel(t), montant: t.amount, date: t.date, cat: guessCat(t.text + " " + t.counterpart), source: "banque", banque: c.bank }); added++; }
+          else { B.inbox.push({ id: uid(), from: cleanLabel(t), text: t.text || "", montant: t.amount, date: t.date, banque: c.bank }); credits++; }
+        }
+      } catch (e) { errors.push(c.bank + " : " + e.message); }
+    }
+  }
+  B.lastSync = Date.now(); syncing = false; save(); render();
+  if (errors.length) toast(errors[0]);
+  else if (added || credits) toast(`${added} dépense${added > 1 ? "s" : ""} et ${credits} virement${credits > 1 ? "s" : ""} reçu${credits > 1 ? "s" : ""} importés`);
+  else if (manual) toast("Tout est à jour");
+}
+
+function onResume() {
+  const B = ensureBank();
+  if (B.pending) checkPending();
+  else if (B.connections.length && Date.now() - B.lastSync > 6 * 3600e3) syncBanks(false);
+}
+
+async function checkPending() {
+  const B = ensureBank(); const p = B.pending; if (!p) return;
+  try {
+    const r = await api("/result?state=" + encodeURIComponent(p.state));
+    if (r.status === "done") {
+      B.pending = null; clearInterval(pollT);
+      if (S.example) { const keep = S.bank; S = emptyState(); S.bank = keep; }
+      const s = r.session, old = B.connections.find(c => c.bank === s.bank);
+      const accounts = s.accounts.map(a => { const prev = old?.accounts.find(o => accKey(o) === accKey(a)); return { ...a, on: prev ? prev.on : true, lastDate: prev?.lastDate }; });
+      if (old) { if (old.id && old.id !== s.id) api("/disconnect?session=" + encodeURIComponent(old.id)).catch(() => {}); Object.assign(old, { id: s.id, validUntil: s.validUntil, accounts }); }
+      else B.connections.push({ id: s.id, bank: s.bank, country: s.country, validUntil: s.validUntil, accounts });
+      save(); closeSheet(); tab = "spend"; render();
+      toast(s.bank + " connectée");
+      syncBanks(false);
+    } else if (r.status === "error") { B.pending = null; clearInterval(pollT); save(); render(); toast(r.error || "Connexion refusée"); }
+    else if (r.status === "expired" || Date.now() - p.at > 3600e3) { B.pending = null; clearInterval(pollT); save(); render(); }
+  } catch (e) { /* serveur momentanément injoignable : on réessaiera au prochain retour */ }
+}
+
+function bankAlerts() {
+  const B = ensureBank(); const soon = Date.now() + 10 * 864e5;
+  return B.connections.filter(c => c.validUntil && new Date(c.validUntil) < soon).map(c => {
+    const gone = new Date(c.validUntil) < new Date();
+    return `<div class="banner" style="background:var(--danger-soft)"><span>${gone ? "L'accès à <b>" + esc(c.bank) + "</b> a expiré" : "L'accès à <b>" + esc(c.bank) + "</b> expire le " + dfr(c.validUntil.slice(0, 10))}</span><button class="btn small" data-act="reconnect" data-bank="${esc(c.bank)}" data-country="${esc(c.country)}">Renouveler</button></div>`;
+  }).join("");
+}
+
+function syncBar() {
+  const B = ensureBank();
+  if (!B.connections.length) return `<div class="banner"><span>Importez vos opérations automatiquement depuis votre banque.</span><button class="btn small" data-tabgo="settings">Connecter</button></div>`;
+  const when = B.lastSync ? new Date(B.lastSync).toLocaleString("fr-FR", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" }) : "jamais";
+  return `<div class="card row between" style="padding:12px 14px"><div><b>${B.connections.map(c => esc(c.bank)).join(", ")}</b><br><small class="muted">${syncing ? "Synchronisation en cours…" : "Dernière synchro : " + when}</small></div>
+    <button class="btn small" data-act="sync" ${syncing ? "disabled" : ""}>${syncing ? "…" : "Synchroniser"}</button></div>`;
+}
+
+function inboxCard() {
+  const B = ensureBank(); if (!B.inbox.length) return "";
+  const items = [...B.inbox].sort((a, b) => b.date.localeCompare(a.date));
+  return `<section class="card"><div class="row between"><h2>Virements reçus à trier</h2><span class="pill wait">${items.length}</span></div>
+  <small class="muted">Dites à Lissé ce que représente chaque entrée d'argent.</small><div class="list">
+  ${items.map(i => `<div class="cat"><div class="row between"><div class="t" style="min-width:0"><b style="display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(i.from)}</b><small class="muted">${dfr(i.date)} · ${esc(i.banque)}</small></div><span class="amt num" style="color:var(--salary)">+${fmt(i.montant)}</span></div>
+    <div class="row" style="flex-wrap:wrap;gap:6px"><button class="btn small" data-act="inFree" data-i="${i.id}">Paiement freelance</button><button class="btn small ghost" data-act="inSal" data-i="${i.id}">Salaire</button><button class="btn small ghost" data-act="inSkip" data-i="${i.id}">Ignorer</button></div></div>`).join("")}
+  </div></section>`;
+}
+
+function bankSettings() {
+  const B = ensureBank();
+  return `<section class="card stack"><h2>Banques</h2>
+    <small class="muted">Synchronisation automatique via votre serveur Lissé et Enable Banking (open banking agréé). Vos identifiants bancaires ne sont jamais saisis dans Lissé.</small>
+    <div class="field"><label for="bk-server">Adresse du serveur</label><input id="bk-server" type="url" autocapitalize="off" autocorrect="off" placeholder="https://lisse.xxxx.workers.dev" value="${esc(B.server)}" data-bank-set="server"></div>
+    <div class="field"><label for="bk-token">Code secret du serveur</label><input id="bk-token" type="password" autocapitalize="off" autocorrect="off" value="${esc(B.token)}" data-bank-set="token"></div>
+    <div class="row"><button class="btn ghost" style="flex:1" data-act="ping">Tester</button><button class="btn" style="flex:1" data-act="connectBank">+ Connecter une banque</button></div>
+    <div id="ping-out"></div>
+    ${B.pending ? `<div class="banner"><span>Connexion à <b>${esc(B.pending.bank)}</b> en attente de votre accord.</span><button class="btn small ghost" data-act="cancelPending">Annuler</button></div>` : ""}
+    ${B.connections.map(c => `<div class="card" style="padding:12px"><div class="row between"><div><b>${esc(c.bank)}</b><br><small class="muted">Accès valable jusqu'au ${c.validUntil ? dfr(c.validUntil.slice(0, 10)) + " " + c.validUntil.slice(0, 4) : "?"}</small></div>
+      <button class="btn small danger" data-act="removeBank" data-bank="${esc(c.bank)}">Retirer</button></div>
+      ${c.accounts.map(a => `<label class="row between" style="padding-top:10px;gap:8px"><span style="min-width:0"><span style="display:block">${esc(a.name)}</span><small class="muted">${a.iban ? "…" + esc(a.iban.slice(-4)) : esc(a.currency)}</small></span><input type="checkbox" style="width:22px;height:22px;flex:none" data-acc="${esc(c.bank)}|${esc(accKey(a))}" ${a.on !== false ? "checked" : ""}></label>`).join("")}
+      <button class="btn small ghost" style="margin-top:10px" data-act="reconnect" data-bank="${esc(c.bank)}" data-country="${esc(c.country)}">Renouveler l'accès</button></div>`).join("")}
+  </section>`;
+}
+
+function bankPicker() {
+  openSheet(`<div class="row between"><h2>Choisir votre banque</h2><button class="iconbtn" data-act="close" aria-label="Fermer">×</button></div>
+    <div class="grid2"><div class="field"><label for="bk-country">Pays</label><select id="bk-country">${Object.entries(COUNTRIES).map(([k, n]) => `<option value="${k}" ${k === bankCountry ? "selected" : ""}>${n}</option>`).join("")}</select></div>
+    <div class="field"><label for="bk-q">Rechercher</label><input id="bk-q" placeholder="Nom de la banque" autocomplete="off"></div></div>
+    <div id="bk-list" class="list"><div class="empty">Chargement des banques…</div></div>`);
+  loadBanks();
+}
+async function loadBanks() {
+  try { bankList = await api("/banks?country=" + bankCountry); filterBanks(); }
+  catch (e) { const l = $("#bk-list"); if (l) l.innerHTML = `<div class="empty">${esc(e.message)}</div>`; }
+}
+function filterBanks() {
+  const l = $("#bk-list"); if (!l) return;
+  const q = ($("#bk-q")?.value || "").toLowerCase().normalize("NFD").replace(/\p{M}/gu, "");
+  const m = bankList.filter(b => b.name.toLowerCase().normalize("NFD").replace(/\p{M}/gu, "").includes(q)).slice(0, 80);
+  l.innerHTML = m.length ? m.map(b => `<div class="item" data-act="pickBank" data-bank="${esc(b.name)}" data-country="${esc(b.country)}" data-max="${b.maxValidity}">
+    ${b.logo ? `<img src="${esc(b.logo)}" alt="" style="width:34px;height:34px;object-fit:contain;border-radius:8px;background:#fff;flex:none">` : `<div class="dot" style="background:var(--salary-soft);color:var(--salary)">${initials(b.name)}</div>`}
+    <div class="t"><b>${esc(b.name)}</b></div><span class="muted">›</span></div>`).join("") : `<div class="empty">Aucune banque trouvée.</div>`;
+}
+async function startConnect(bank, country, max) {
+  openSheet(`<div class="row between"><h2>${esc(bank)}</h2><button class="iconbtn" data-act="close" aria-label="Fermer">×</button></div><div class="muted" id="cx-msg">Préparation de la connexion sécurisée…</div>`);
+  try {
+    const r = await api("/connect", { method: "POST", body: { bank, country, maxValidity: max } });
+    const B = ensureBank(); B.pending = { state: r.state, bank, at: Date.now() }; save();
+    openSheet(`<div class="row between"><h2>${esc(bank)}</h2><button class="iconbtn" data-act="close" aria-label="Fermer">×</button></div>
+      <p>Vous allez être redirigé vers votre banque pour autoriser Lissé à lire vos opérations. Lissé ne voit jamais vos identifiants.</p>
+      <a class="btn" style="text-align:center;text-decoration:none" href="${esc(r.url)}" target="_blank" rel="noopener">Ouvrir ${esc(bank)}</a>
+      <small class="muted">Une fois l'accord donné, revenez dans Lissé : vos comptes apparaîtront automatiquement.</small>`);
+    clearInterval(pollT); pollT = setInterval(() => { if (!ensureBank().pending) clearInterval(pollT); else if (document.visibilityState === "visible") checkPending(); }, 4000);
+  } catch (e) { const m = $("#cx-msg"); if (m) m.textContent = e.message; }
+}
+
+function bankAction(a, t) {
+  const B = ensureBank();
+  if (a === "sync") { syncBanks(true); return true; }
+  if (a === "connectBank") { if (!B.server || !B.token) { toast("Renseignez l'adresse et le code du serveur"); return true; } bankPicker(); return true; }
+  if (a === "pickBank") { startConnect(t.dataset.bank, t.dataset.country, +t.dataset.max || 0); return true; }
+  if (a === "reconnect") { tab = "settings"; render(); startConnect(t.dataset.bank, t.dataset.country, 0); return true; }
+  if (a === "cancelPending") { B.pending = null; clearInterval(pollT); save(); render(); return true; }
+  if (a === "removeBank") {
+    openSheet(`<h2>Retirer ${esc(t.dataset.bank)} ?</h2><p class="muted">Lissé n'importera plus les opérations de cette banque. Les dépenses déjà importées sont conservées.</p>
+      <button class="btn danger" data-act="removeBankOk" data-bank="${esc(t.dataset.bank)}">Retirer la banque</button><button class="btn ghost" data-act="close">Annuler</button>`);
+    return true;
+  }
+  if (a === "removeBankOk") {
+    const c = B.connections.find(c => c.bank === t.dataset.bank);
+    if (c?.id) api("/disconnect?session=" + encodeURIComponent(c.id)).catch(() => {});
+    B.connections = B.connections.filter(x => x !== c); save(); closeSheet(); render(); toast("Banque retirée"); return true;
+  }
+  if (a === "ping") {
+    const out = $("#ping-out"); out.innerHTML = `<small class="muted">Test en cours…</small>`;
+    api("/ping").then(r => {
+      const pb = [];
+      if (!r.redirectOk) pb.push(`Ajoutez cette adresse de retour dans Enable Banking : <b style="word-break:break-all">${esc(r.redirect)}</b>`);
+      if (!r.kv) pb.push("La liaison LISSE_KV n'est pas configurée dans Cloudflare.");
+      if (r.active === false) pb.push("L'application Enable Banking n'est pas active : liez vos comptes dans son tableau de bord.");
+      out.innerHTML = pb.length ? `<div class="banner" style="background:var(--danger-soft);display:block">${pb.map(x => "<p style='margin:4px 0'>" + x + "</p>").join("")}</div>`
+        : `<div class="banner" style="background:var(--salary-soft)"><span>Serveur prêt · application « ${esc(r.name || "")} »</span></div>`;
+    }).catch(e => { out.innerHTML = `<div class="banner" style="background:var(--danger-soft)"><span>${esc(e.message)}</span></div>`; });
+    return true;
+  }
+  const item = t.dataset.i && B.inbox.find(x => x.id === t.dataset.i);
+  if (a === "inSkip" || a === "inSal") { B.inbox = B.inbox.filter(x => x !== item); save(); closeSheet(); render(); toast(a === "inSal" ? "Salaire noté" : "Virement ignoré"); return true; }
+  if (a === "inFree" && item) {
+    const pend = S.factures.filter(f => f.statut === "attente").sort((x, y) => Math.abs(x.montant - item.montant) - Math.abs(y.montant - item.montant));
+    openSheet(`<div class="row between"><h2>Paiement de ${fmt(item.montant)}</h2><button class="iconbtn" data-act="close" aria-label="Fermer">×</button></div>
+      <small class="muted">${esc(item.from)} · ${dfr(item.date)}</small>
+      ${pend.length ? `<div class="label">Quelle facture est payée ?</div><div class="list">${pend.map(f => `<div class="item" data-act="inMatch" data-i="${item.id}" data-f="${f.id}"><div class="dot" style="background:var(--free-soft);color:var(--free)">${initials(f.client)}</div><div class="t"><b>${esc(f.client)}</b><small>Émise le ${dfr(f.emission)}</small></div><div class="amt">${fmt(f.montant)}</div></div>`).join("")}</div>` : ""}
+      <button class="btn ${pend.length ? "ghost" : ""}" data-act="inNew" data-i="${item.id}">Créer une facture payée</button>`);
+    return true;
+  }
+  if ((a === "inMatch" || a === "inNew") && item) {
+    let f;
+    if (a === "inMatch") { f = S.factures.find(x => x.id === t.dataset.f); Object.assign(f, { statut: "payee", paiement: item.date }); }
+    else { f = { id: uid(), client: item.from, montant: item.montant, emission: item.date, statut: "payee", paiement: item.date }; S.factures.push(f); }
+    B.inbox = B.inbox.filter(x => x !== item); save(); closeSheet(); render(); toast("Facture payée : " + fmt0(provision(f)) + " mis de côté"); return true;
+  }
+  return false;
+}
+document.addEventListener("input", e => { if (e.target.id === "bk-q") filterBanks(); });
+document.addEventListener("change", e => {
+  const el = e.target, B = ensureBank();
+  if (el.id === "bk-country") { bankCountry = el.value; $("#bk-list").innerHTML = `<div class="empty">Chargement des banques…</div>`; loadBanks(); }
+  if (el.dataset.bankSet) {
+    let v = el.value.trim();
+    if (el.dataset.bankSet === "server" && v) { if (!/^https?:\/\//i.test(v)) v = "https://" + v; v = v.replace(/\/+$/, ""); el.value = v; }
+    B[el.dataset.bankSet] = v; save(); toast("Réglage enregistré");
+  }
+  if (el.dataset.acc) { const [bank, key] = el.dataset.acc.split("|"); const a = B.connections.find(c => c.bank === bank)?.accounts.find(x => accKey(x) === key); if (a) { a.on = el.checked; save(); } }
+});
 
 /* ---------- Évènements ---------- */
 let toastT;
@@ -479,6 +708,7 @@ document.addEventListener("click", async e => {
     else { const u = URL.createObjectURL(file); const l = document.createElement("a"); l.href = u; l.download = file.name; l.click(); setTimeout(() => URL.revokeObjectURL(u), 4000); }
   }
   else if (a === "import") $("#importInput").click();
+  else if (bankAction(a, t)) {}
   else if (a === "reset") openSheet(`<h2>Tout effacer ?</h2><p class="muted">Dépenses, factures et réglages seront supprimés de ce téléphone.</p><button class="btn danger" data-act="resetOk">Oui, tout effacer</button><button class="btn ghost" data-act="close">Annuler</button>`);
   else if (a === "resetOk") { S = emptyState(); save(); closeSheet(); render(); toast("Données effacées"); }
 });
@@ -496,6 +726,8 @@ $("#importInput").addEventListener("change", async e => {
 });
 
 render();
+document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible") onResume(); });
+onResume();
 if ("serviceWorker" in navigator && location.protocol === "https:") navigator.serviceWorker.register("sw.js").catch(() => {});
 </script>
 </body>
